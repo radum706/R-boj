@@ -50,7 +50,7 @@ Tabs nest under the tab that opened them, so you can see where each one came fro
 
 1. Download or clone this repository.
 2. Open `brave://extensions` (or `chrome://extensions`) and turn on **Developer mode**.
-3. Click **Load unpacked** and select the `raboj` folder.
+3. Click **Load unpacked** and select the folder you cloned or unzipped (`R-boj`).
 4. Click the Răboj toolbar icon, or press `Alt+Shift+S`, to open the sidebar.
 
 Tip: turn on Brave's vertical tabs and collapse them, so the native tab list takes less space.
