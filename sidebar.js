@@ -441,7 +441,8 @@ document.addEventListener('drop', async e => {
 
 // ---------- init ----------
 (async () => {
-  winId = (await chrome.windows.getCurrent()).id;
+  // ?window=<id> shows another window's tabs (for opening the sidebar as a page while debugging)
+  winId = +new URLSearchParams(location.search).get('window') || (await chrome.windows.getCurrent()).id;
   for (const ev of ['onCreated', 'onRemoved', 'onUpdated', 'onMoved', 'onActivated', 'onAttached', 'onDetached', 'onReplaced']) chrome.tabs[ev].addListener(schedule);
   for (const ev of ['onCreated', 'onRemoved', 'onChanged', 'onMoved']) chrome.bookmarks[ev].addListener(() => curPanel().type === 'bookmarks' && schedule());
   chrome.storage.onChanged.addListener(schedule);

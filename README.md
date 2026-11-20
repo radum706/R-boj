@@ -6,6 +6,17 @@ A tab manager for Brave and other Chromium browsers, in the browser's side panel
 
 Tabs nest under the tab that opened them, so you can see where each one came from. You can collapse whole branches, group tabs into panels and save snapshots of your session. No build step and no dependencies: plain JavaScript, Manifest V3.
 
+| Tree tabs in a panel | Dark theme | Tab menu | Panel menu |
+|---|---|---|---|
+| <img src="docs/screenshots/sidebar-light.png" alt="The Work panel: a tree of tabs with a collapsed branch, two tabs pinned in all panels and one pinned to Work" width="200"> | <img src="docs/screenshots/sidebar-dark.png" alt="The Home panel in the dark theme" width="200"> | <img src="docs/screenshots/tab-menu.png" alt="Right-click menu on a tab, with pinning to this panel or to all panels" width="200"> | <img src="docs/screenshots/panel-menu.png" alt="Right-click menu on a panel: name, colour and icon" width="200"> |
+
+<details>
+<summary>Settings</summary>
+
+<img src="docs/screenshots/settings.png" alt="Settings page: behaviour options and the panel editor with its icon picker" width="600">
+
+</details>
+
 ## Features
 
 **Tree tabs**
