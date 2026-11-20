@@ -1,0 +1,83 @@
+:root {
+  --bg: #f7f7f8; --fg: #1d1d1f; --muted: #6e6e73; --hover: #e9e9ec; --active: #dcdcf5;
+  --sel: #c9d6ff; --line: #d8d8dc; --menu: #ffffff; --accent: #7c8cff;
+  --row: 28px; --indent: 14px; color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1f; --fg: #e8e8ea; --muted: #9a9aa0; --hover: #2a2a2f; --active: #34344a;
+    --sel: #2f3d66; --line: #333338; --menu: #26262b; color-scheme: dark;
+  }
+}
+:root[data-density="compact"] { --row: 22px; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--fg); font: 13px/1.2 system-ui, sans-serif;
+  display: flex; flex-direction: column; user-select: none; overflow: hidden;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; border-radius: 6px; }
+button:hover { background: var(--hover); }
+
+header { border-bottom: 1px solid var(--line); padding: 4px; display: grid; gap: 4px; }
+#panels { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.panel {
+  display: flex; align-items: center; gap: 5px; padding: 4px 8px; white-space: nowrap; flex: none;
+  border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0;
+}
+.panel.on { border-bottom-color: var(--pc); background: var(--hover); }
+.panel .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pc); }
+.panel .n { color: var(--muted); font-size: 11px; }
+.panel.drop { outline: 2px solid var(--pc); }
+.bar { display: flex; gap: 4px; }
+.bar input {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--menu); color: var(--fg); font: inherit;
+}
+.bar button { width: 26px; height: 26px; font-size: 16px; }
+
+#pinned { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; }
+#pinned:empty { display: none; }
+#pinned .pin { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 6px; }
+#pinned .pin:hover { background: var(--hover); }
+#pinned .pin.active { background: var(--active); }
+
+#list { flex: 1; overflow-y: auto; padding: 2px 0 40px; outline: none; }
+.row {
+  height: var(--row); display: flex; align-items: center; gap: 4px; padding-right: 4px;
+  padding-left: calc(var(--d) * var(--indent) + 4px); border-radius: 6px; margin: 0 4px; cursor: default;
+}
+.row:hover { background: var(--hover); }
+.row.active { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); }
+.row.sel { background: var(--sel); }
+.row.discarded .title, .row.discarded .fav { opacity: .5; }
+.row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.row.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+.row.drop-child { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.tw { width: 14px; height: 14px; flex: none; display: grid; place-items: center; color: var(--muted); font-size: 9px; border-radius: 3px; }
+.tw:empty { visibility: hidden; }
+.tw:hover { background: var(--line); }
+.fav { width: 16px; height: 16px; flex: none; }
+.loading .fav { animation: pulse 1s infinite alternate; }
+@keyframes pulse { to { opacity: .3; } }
+.title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.count { font-size: 10px; color: var(--muted); background: var(--line); border-radius: 8px; padding: 1px 5px; }
+.audio { font-size: 11px; padding: 0 2px; }
+.x { width: 18px; height: 18px; flex: none; color: var(--muted); opacity: 0; font-size: 14px; line-height: 1; }
+.row:hover .x, .row.active .x { opacity: 1; }
+.folder .title { font-weight: 500; }
+.empty { color: var(--muted); padding: 16px; text-align: center; }
+
+#ctx {
+  position: fixed; z-index: 10; min-width: 180px; max-width: 260px; padding: 4px; background: var(--menu);
+  border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.2);
+  max-height: 90vh; overflow-y: auto;
+}
+#ctx .it { display: block; width: 100%; text-align: left; padding: 5px 8px; }
+#ctx .it.sub { padding-left: 20px; }
+#ctx .hd { padding: 5px 8px 2px; color: var(--muted); font-size: 11px; }
+#ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+#ctx input { width: 100%; margin: 2px 0; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+#ctx input[type=color] { height: 28px; padding: 2px; }

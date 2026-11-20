@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Răboj settings</title>
+  <link rel="stylesheet" href="sidebar.css">
+  <style>
+    body { display: block; overflow: auto; user-select: text; font-size: 14px; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+    h1 { font-size: 20px; margin: 0 0 16px; }
+    h2 { font-size: 15px; margin: 28px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    section { background: var(--menu); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; }
+    label.opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    label.opt:last-child, .prow:last-child, .snap:last-child { border-bottom: 0; }
+    select, input[type=number], input[type=text], textarea {
+      font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
+    }
+    input[type=number] { width: 80px; }
+    textarea { width: 100%; min-height: 140px; font-family: ui-monospace, monospace; font-size: 12px; margin: 10px 0; }
+    .prow, .snap { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .prow input[type=text] { flex: 1; min-width: 0; }
+    .prow input[type=color] { width: 34px; height: 30px; padding: 0; border: 0; background: none; }
+    .snap .info { flex: 1; min-width: 0; }
+    .snap small { color: var(--muted); }
+    .btn { padding: 6px 10px; border: 1px solid var(--line); background: var(--bg); }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0; }
+    .note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+    kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Răboj</h1>
+
+  <h2>Behavior</h2>
+  <section>
+    <label class="opt">Nest tabs under the tab that opened them <input type="checkbox" data-k="nest"></label>
+    <label class="opt">Closing a collapsed parent closes its branch <input type="checkbox" data-k="closeCollapsedBranch"></label>
+    <label class="opt">When a parent is closed, its children
+      <select data-k="onParentClose"><option value="promote">move up a level</option><option value="close">are closed too</option></select></label>
+    <label class="opt">Switch panel when a tab from another panel is activated <input type="checkbox" data-k="switchPanelOnActivate"></label>
+    <label class="opt">Activate the panel's last tab when switching panels <input type="checkbox" data-k="activateLastOnPanelSwitch"></label>
+  </section>
+
+  <h2>Panels</h2>
+  <section>
+    <div id="panels-ed"></div>
+    <div class="actions">
+      <button class="btn" id="add-panel">Add panel</button>
+      <button class="btn" id="add-bm">Add bookmarks panel</button>
+    </div>
+  </section>
+  <p class="note">New tabs open in the panel you're viewing; tabs opened from a page stay in their parent's panel. Deleting a panel moves its tabs to the first panel.</p>
+
+  <h2>Appearance</h2>
+  <section>
+    <label class="opt">Density <select data-k="density"><option value="normal">Normal</option><option value="compact">Compact</option></select></label>
+    <label class="opt">Indent per level (px) <input type="number" min="4" max="40" data-k="indent"></label>
+    <label class="opt">Show hidden-children count on collapsed tabs <input type="checkbox" data-k="showCount"></label>
+    <div>
+      <p class="note">Custom CSS for the sidebar. Classes: <code>.row</code>, <code>.row.active</code>, <code>.title</code>, <code>.panel</code>, <code>#pinned</code>. Variables: <code>--row</code>, <code>--indent</code>, <code>--bg</code>, <code>--fg</code>, <code>--accent</code>.</p>
+      <textarea data-k="css" spellcheck="false" placeholder=".row { border-radius: 0; }"></textarea>
+    </div>
+  </section>
+
+  <h2>Snapshots</h2>
+  <section>
+    <label class="opt">Auto snapshot every (minutes, 0 = off) <input type="number" min="0" data-k="snapInterval"></label>
+    <label class="opt">Keep last <input type="number" min="1" max="500" data-k="snapKeep"></label>
+    <label class="opt">Restore tabs unloaded (load when clicked) <input type="checkbox" data-k="restoreUnloaded"></label>
+    <div id="snaps"></div>
+    <div class="actions">
+      <button class="btn" id="snap-now">Snapshot now</button>
+      <button class="btn" id="snap-import">Import snapshot…</button>
+    </div>
+  </section>
+  <p class="note">Restoring opens each saved window as a new window, keeping panels and the tree.</p>
+
+  <h2>Shortcuts</h2>
+  <section>
+    <p class="note" style="padding:10px 0">Defaults: <kbd>Alt+Shift+S</kbd> open sidebar, <kbd>Alt+Shift+←/→</kbd> switch panel, <kbd>Alt+Shift+T</kbd> new child tab. In the sidebar: <kbd>↑</kbd><kbd>↓</kbd> switch tab, <kbd>←</kbd><kbd>→</kbd> collapse/expand, <kbd>Del</kbd> close, <kbd>/</kbd> search, Ctrl/Shift-click to select several.
+    Change them at <code>brave://extensions/shortcuts</code>.</p>
+  </section>
+
+  <h2>Backup</h2>
+  <section>
+    <div class="actions">
+      <button class="btn" id="exp">Export settings</button>
+      <button class="btn" id="imp">Import settings…</button>
+      <button class="btn" id="reset">Reset settings</button>
+    </div>
+  </section>
+  <input type="file" id="file" accept="application/json,.json" hidden>
+</div>
+<script src="tree.js"></script>
+<script src="options.js"></script>
+</body>
+</html>
