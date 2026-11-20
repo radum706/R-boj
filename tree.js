@@ -2,8 +2,8 @@
 // so native drags in Brave's own tab strip can never corrupt it: an invalid parent just makes a root.
 const DEFAULTS = {
   panels: [
-    { id: 'default', name: 'Tabs', color: '#7c8cff' },
-    { id: 'bookmarks', name: 'Bookmarks', color: '#e0a030', type: 'bookmarks' },
+    { id: 'default', name: 'Tabs', color: '#7c8cff', icon: 'tabs' },
+    { id: 'bookmarks', name: 'Bookmarks', color: '#e0a030', type: 'bookmarks', icon: 'bookmark' },
   ],
   nest: true,                    // nest tabs under their opener
   closeCollapsedBranch: true,    // closing a collapsed parent closes its branch
@@ -47,7 +47,16 @@ function buildTree(tabs, meta, cfg, panelId) {
   return out;
 }
 
+// Pinned tabs shown in a panel: the global ones (meta.g) in every panel, the others only in their own.
+function pinnedFor(tabs, meta, cfg, panelId) {
+  const pinned = tabs.filter(t => t.pinned);
+  return {
+    global: pinned.filter(t => meta[t.id]?.g),
+    panel: pinned.filter(t => !meta[t.id]?.g && panelOf(meta[t.id], cfg) === panelId),
+  };
+}
+
 // Node plus all descendants, in order.
 const subtree = (nodes, i) => nodes.slice(i, i + 1 + nodes[i].desc);
 
-if (typeof module !== 'undefined') module.exports = { DEFAULTS, panelOf, tabPanels, buildTree, subtree };
+if (typeof module !== 'undefined') module.exports = { DEFAULTS, panelOf, tabPanels, buildTree, subtree, pinnedFor };

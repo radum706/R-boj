@@ -1,6 +1,6 @@
 // Tests for tree.js. Run with: node test_tree.js
 const assert = require('node:assert/strict');
-const { DEFAULTS, panelOf, tabPanels, buildTree, subtree } = require('./tree.js');
+const { DEFAULTS, panelOf, tabPanels, buildTree, subtree, pinnedFor } = require('./tree.js');
 
 const cfg = {
   ...DEFAULTS,
@@ -55,6 +55,15 @@ test('subtree returns the node and its descendants', () => {
   assert.deepEqual(subtree(nodes, 0).map(n => n.tab.id), [1, 2, 3, 4]);
   assert.deepEqual(subtree(nodes, 1).map(n => n.tab.id), [2, 3]);
   assert.deepEqual(subtree(nodes, 4).map(n => n.tab.id), [5]);
+});
+
+test('global pinned tabs show in every panel, the others only in their own', () => {
+  const list = tabs([{ id: 1, pinned: true }, { id: 2, pinned: true }, { id: 3, pinned: true }, 4]);
+  const meta = { 1: { g: true }, 2: { panel: 'work' }, 3: {} };
+  const ids = r => [r.global.map(t => t.id), r.panel.map(t => t.id)];
+  assert.deepEqual(ids(pinnedFor(list, meta, cfg, 'default')), [[1], [3]]);
+  assert.deepEqual(ids(pinnedFor(list, meta, cfg, 'work')), [[1], [2]]);
+  assert.deepEqual(ids(pinnedFor(list, meta, cfg, 'bookmarks')), [[1], []]);
 });
 
 test('panelOf falls back to the first tab panel', () => {

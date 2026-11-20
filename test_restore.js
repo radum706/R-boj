@@ -1,5 +1,6 @@
-// Runs background.js against a fake chrome API to check that the tree survives
-// browser restarts and window closes. Run with: node test_restore.js
+// Runs background.js against a fake chrome API: the tree must survive browser restarts and
+// window closes, and closing a tab must activate the one above it in the same panel.
+// Run with: node test_restore.js
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,7 +32,8 @@ class Browser {
       set: async obj => { Object.assign(this[key], clone(obj)); },
     });
     const ev = {};
-    for (const n of ['onCreated', 'onRemoved', 'onReplaced', 'onActivated', 'onUpdated', 'wOnRemoved', 'wOnCreated',
+    for (const n of ['onCreated', 'onRemoved', 'onReplaced', 'onActivated', 'onUpdated', 'onMoved', 'onAttached',
+      'onDetached', 'wOnRemoved', 'wOnCreated',
       'storageChanged', 'alarm', 'message', 'command']) ev[n] = event();
     this.ev = ev;
     const windowIds = () => [...new Set(this.tabs.map(t => t.windowId))];
@@ -40,8 +42,11 @@ class Browser {
       tabs: {
         query: async (q = {}) => clone(this.tabs.filter(t => q.windowId == null || t.windowId === q.windowId)
           .sort((a, b) => a.windowId - b.windowId || a.index - b.index)),
+        update: async (id, props) => { if (props.active) this.activate(id); },
+        remove: async ids => { for (const id of [].concat(ids)) this.closeTab(id); },
         onCreated: ev.onCreated, onRemoved: ev.onRemoved, onReplaced: ev.onReplaced,
-        onActivated: ev.onActivated, onUpdated: ev.onUpdated,
+        onActivated: ev.onActivated, onUpdated: ev.onUpdated, onMoved: ev.onMoved,
+        onAttached: ev.onAttached, onDetached: ev.onDetached,
       },
       windows: {
         getAll: async () => windowIds().map(id => ({ id })),
@@ -83,6 +88,29 @@ class Browser {
     this.now = end;
     await this.settle();
   }
+
+  activate(id) {
+    const t = this.tabs.find(x => x.id === id);
+    if (!t) throw new Error(`No tab with id: ${id}`);
+    for (const x of this.tabs) if (x.windowId === t.windowId) x.active = x === t;
+    this.ev.onActivated.fire({ tabId: id, windowId: t.windowId });
+  }
+
+  // Like Chromium: onRemoved first, then it activates the tab to the right (or left) of a closed active tab.
+  closeTab(id) {
+    const t = this.tabs.find(x => x.id === id);
+    if (!t) return;
+    const win = this.tabs.filter(x => x.windowId === t.windowId);
+    const i = win.indexOf(t);
+    this.tabs = this.tabs.filter(x => x !== t);
+    win.splice(i, 1);
+    win.forEach((x, k) => { x.index = k; });
+    this.ev.onRemoved.fire(id, { windowId: t.windowId, isWindowClosing: false });
+    if (t.active && win.length) this.activate((win[i] || win[i - 1]).id);
+  }
+
+  send(msg) { return new Promise(r => this.ev.message.fire(msg, {}, r)); }
+  active(windowId = 1) { return this.tabs.find(t => t.windowId === windowId && t.active)?.url; }
 
   async closeWindow(windowId) {
     for (const t of this.tabs.filter(x => x.windowId === windowId)) {
@@ -206,6 +234,115 @@ async function test(name, fn) {
     await after.start();
     await after.advance(2000);
     assert.deepEqual(after.tree(), expected);
+  });
+
+  // One window: a (Tabs), then b and its child c, d (Work), then x (Tabs). Chromium alone would go
+  // to the right of a closed tab, often landing in the other panel.
+  const closing = async (activeId, extraMeta = {}) => {
+    const b = new Browser({
+      local: { cfg },
+      session: { meta: {
+        1: { p: null, panel: 'default' }, 2: { p: null, panel: 'work' }, 3: { p: 2, panel: 'work' },
+        4: { p: null, panel: 'work' }, 5: { p: null, panel: 'default' }, ...extraMeta,
+      }, ap: { 1: 'work' } },
+      tabs: ['a', 'b', 'c', 'd', 'x'].map((n, i) => ({ id: i + 1, windowId: 1, url: `https://${n}.test/` })),
+    });
+    b.tabs.forEach(t => { t.active = t.id === activeId; });
+    await b.start();
+    await b.advance(200);
+    return b;
+  };
+
+  await test('closing a tab goes to the tab above in the same panel', async () => {
+    const b = await closing(4);
+    b.closeTab(4); // Chromium picks x, in the Tabs panel
+    await b.advance(2000);
+    assert.equal(b.active(), 'https://c.test/');
+    assert.equal(b.session.ap[1], 'work');
+  });
+
+  await test('closing the first tab of a panel goes to the one below', async () => {
+    const b = await closing(2);
+    b.closeTab(2);
+    await b.advance(2000);
+    assert.equal(b.active(), 'https://c.test/');
+    assert.equal(b.tree()['https://c.test/'].parent, null); // promoted
+  });
+
+  await test('closing from the sidebar picks the tab above and keeps the children', async () => {
+    const b = await closing(2, { 1: { p: null, panel: 'work' } });
+    await b.send({ type: 'close', ids: [2] });
+    await b.advance(2000);
+    assert.equal(b.active(), 'https://a.test/');
+    assert.equal(b.tree()['https://c.test/'].panel, 'work');
+  });
+
+  await test('closing the last tab of a panel leaves the choice to the browser', async () => {
+    const b = await closing(1);
+    b.closeTab(1);
+    await b.advance(2000);
+    assert.equal(b.active(), 'https://x.test/');
+  });
+
+  await test('the tab above is skipped when it is hidden in a collapsed branch', async () => {
+    const b = await closing(4, { 2: { p: null, panel: 'work', c: true } });
+    b.closeTab(4);
+    await b.advance(2000);
+    assert.equal(b.active(), 'https://b.test/');
+  });
+
+  const pinning = async activeId => {
+    const b = new Browser({
+      local: { cfg },
+      session: { meta: { 1: { panel: 'default', g: true }, 2: { panel: 'work' }, 3: { panel: 'default' }, 4: { panel: 'work' } },
+        ap: { 1: 'default' } },
+      tabs: [
+        { id: 1, windowId: 1, url: 'https://mail.test/', pinned: true }, { id: 2, windowId: 1, url: 'https://jira.test/', pinned: true, index: 1 },
+        { id: 3, windowId: 1, url: 'https://a.test/', index: 2 }, { id: 4, windowId: 1, url: 'https://b.test/', index: 3 },
+      ],
+    });
+    b.tabs.forEach(t => { t.active = t.id === activeId; });
+    await b.start();
+    await b.advance(200);
+    return b;
+  };
+
+  await test('activating a tab pinned to a panel switches to that panel', async () => {
+    const b = await pinning(3);
+    b.activate(2);
+    await b.advance(500);
+    assert.equal(b.session.ap[1], 'work');
+  });
+
+  await test('activating a tab pinned in all panels stays in the current panel', async () => {
+    const b = await pinning(3);
+    b.activate(1);
+    await b.advance(500);
+    assert.equal(b.session.ap[1], 'default');
+  });
+
+  await test('pinning in all panels survives a restart', async () => {
+    const b = await pinning(3);
+    b.ev.onUpdated.fire(3, { url: 'https://a.test/' }, b.tabs[2]);
+    await b.advance(2000);
+    await b.quit();
+    const after = new Browser({ local: b.local, tabs: [
+      { id: 21, windowId: 5, url: 'https://mail.test/', pinned: true }, { id: 22, windowId: 5, url: 'https://jira.test/', pinned: true, index: 1 },
+      { id: 23, windowId: 5, url: 'https://a.test/', index: 2 }, { id: 24, windowId: 5, url: 'https://b.test/', index: 3 },
+    ] });
+    await after.start();
+    await after.advance(3000);
+    assert.equal(after.session.meta[21].g, true);
+    assert.equal(after.session.meta[22].g, undefined);
+    assert.equal(after.session.meta[22].panel, 'work');
+  });
+
+  await test('unpinning forgets "all panels"', async () => {
+    const b = await pinning(3);
+    b.tabs[0].pinned = false;
+    b.ev.onUpdated.fire(1, { pinned: false }, b.tabs[0]);
+    await b.advance(500);
+    assert.equal(b.session.meta[1].g, undefined);
   });
 
   console.log(`${passed} passed${process.exitCode ? ', some failed' : ''}`);

@@ -1,6 +1,6 @@
 importScripts('tree.js');
 
-// meta: tabId -> { p: parentTabId|null, c: collapsed, panel, u: last known url }
+// meta: tabId -> { p: parentTabId|null, c: collapsed, panel, u: last known url, g: pinned in every panel }
 // ap: windowId -> active panel id,  la: panelId -> last active tabId
 let cfg = DEFAULTS, meta = {}, ap = {}, la = {};
 
@@ -22,7 +22,8 @@ const urlOf = t => t.url || t.pendingUrl || meta[t.id]?.u || '';
 const ready = (async () => {
   const l = await chrome.storage.local.get(['cfg', 'tree']);
   cfg = { ...DEFAULTS, ...l.cfg };
-  const s = await chrome.storage.session.get(['meta', 'ap', 'la', 'pending', 'closedWins']);
+  const s = await chrome.storage.session.get(['meta', 'ap', 'la', 'pending', 'closedWins', 'winCache']);
+  Object.assign(winCache, s.winCache);
   if (s.meta) {
     // The service worker was stopped and started again; the browser kept running.
     ({ meta } = s); ap = s.ap || {}; la = s.la || {};
@@ -33,6 +34,7 @@ const ready = (async () => {
     startRestore(l.tree);
   }
   if (pending) await restore();
+  for (const w of await chrome.windows.getAll()) refreshCache(w.id);
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
   setupAlarm();
 })();
@@ -77,7 +79,7 @@ async function restore() {
     const id = map.get(s.id);
     if (id == null) continue;
     const parent = map.get(s.p) ?? null;
-    if (added.has(id)) meta[id] = { p: parent, c: !!s.c, panel: s.panel, u: s.u };
+    if (added.has(id)) meta[id] = { p: parent, c: !!s.c, panel: s.panel, u: s.u, g: s.g || undefined };
     else if (meta[id] && meta[id].p == null && parent != null) meta[id].p = parent; // parent found later
   }
   if (cfg.switchPanelOnActivate) {
@@ -110,7 +112,7 @@ async function persistTree() {
   const entries = tabs.filter(t => meta[t.id]).map(t => {
     const m = meta[t.id];
     m.u = urlOf(t);
-    return { id: t.id, u: m.u, w: t.windowId, p: m.p ?? null, c: !!m.c, panel: m.panel };
+    return { id: t.id, u: m.u, w: t.windowId, p: m.p ?? null, c: !!m.c, panel: m.panel, g: m.g || undefined };
   });
   await chrome.storage.local.set({ tree: [...entries, ...kept] });
 }
@@ -118,8 +120,55 @@ async function persistTree() {
 const winTabs = windowId => chrome.tabs.query({ windowId });
 const curPanel = windowId => panelOf({ panel: ap[windowId] }, cfg);
 
+// ---------- closing the active tab ----------
+// Chromium activates the tab to the right of a closed one, or its opener, which can sit in another panel.
+// Răboj activates the visible tab above it in the same panel instead, or the one below if it was the first.
+// onRemoved arrives when the tab is already gone, so each window's tab order is kept as last seen
+// (also in storage.session, for when the worker wakes up for that very event).
+const winCache = {};
+const cacheT = {}, act = {}, correcting = {};
+const closingNow = new Set(); // closed by closeTabs, which picks the next tab itself
+
+function refreshCache(windowId) {
+  clearTimeout(cacheT[windowId]);
+  cacheT[windowId] = setTimeout(async () => {
+    const tabs = await winTabs(windowId).catch(() => []);
+    if (tabs.length) winCache[windowId] = tabs.map(t => ({ id: t.id, index: t.index, pinned: t.pinned, active: t.active }));
+    else delete winCache[windowId];
+    for (const t of tabs) if (t.active) act[windowId] = t.id;
+    chrome.storage.session.set({ winCache });
+  }, 50);
+}
+
+// tabs: one window as it was before the close. gone: ids being closed.
+function tabAfterClose(tabs, id, gone) {
+  if (tabs.find(t => t.id === id)?.pinned) return null;
+  const nodes = buildTree(tabs, meta, cfg, panelOf(meta[id], cfg));
+  const closesBranch = n => cfg.onParentClose === 'close' || (n.collapsed && cfg.closeCollapsedBranch);
+  const all = new Set(gone);
+  nodes.forEach((n, k) => { if (gone.has(n.tab.id) && closesBranch(n)) subtree(nodes, k).forEach(x => all.add(x.tab.id)); });
+  const i = nodes.findIndex(n => n.tab.id === id);
+  if (i < 0) return null;
+  for (let j = i - 1; j >= 0; j--) if (!all.has(nodes[j].tab.id) && !nodes[j].hidden) return nodes[j].tab.id;
+  for (let j = i + 1; j < nodes.length; j++) if (!all.has(nodes[j].tab.id)) return nodes[j].tab.id;
+  return null; // the panel is now empty: leave it to the browser
+}
+
+// While correcting[windowId] is set, onActivated ignores the tab Chromium picked, so it doesn't switch panels
+// or expand a collapsed branch on the way.
+function expectActivation(windowId, target) {
+  if (target == null) return;
+  correcting[windowId] = target;
+  setTimeout(() => { if (correcting[windowId] === target) delete correcting[windowId]; }, 1000);
+}
+function activate(windowId, target) {
+  if (target == null) return;
+  chrome.tabs.update(target, { active: true }).catch(() => { delete correcting[windowId]; });
+}
+
 // ---------- tab events ----------
 chrome.tabs.onCreated.addListener(async tab => {
+  refreshCache(tab.windowId);
   await ready;
   scheduleRestore();
   if (meta[tab.id]) return; // set explicitly by newTab / snapshot restore
@@ -133,10 +182,17 @@ chrome.tabs.onCreated.addListener(async tab => {
 });
 
 chrome.tabs.onRemoved.addListener(async (id, info) => {
+  const w = info.windowId, known = act[w];
   await ready;
-  if (info.isWindowClosing) { closedWins.add(info.windowId); return; } // keep tree intact across shutdown
+  if (info.isWindowClosing) { closedWins.add(w); return; } // keep tree intact across shutdown
+  const before = winCache[w];
+  refreshCache(w);
   const m = meta[id];
   if (!m) return;
+  const picked = closingNow.delete(id); // closeTabs already chose the next tab
+  const wasActive = known !== undefined ? known === id : !!before?.find(t => t.id === id)?.active;
+  const target = !picked && wasActive && before ? tabAfterClose(before, id, new Set([id])) : null;
+  expectActivation(w, target);
   delete meta[id];
   const kids = Object.keys(meta).filter(k => meta[k].p === id).map(Number);
   if (kids.length && (cfg.onParentClose === 'close' || (m.c && cfg.closeCollapsedBranch))) {
@@ -150,6 +206,7 @@ chrome.tabs.onRemoved.addListener(async (id, info) => {
   } else {
     kids.forEach(k => (meta[k].p = m.p ?? null));
   }
+  activate(w, target);
   save();
 });
 
@@ -163,12 +220,20 @@ chrome.tabs.onReplaced.addListener(async (added, removed) => {
 });
 
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  act[windowId] = tabId;
+  refreshCache(windowId);
   await ready;
+  if (correcting[windowId] != null) {
+    if (correcting[windowId] !== tabId) return; // Chromium's pick after a close; ours follows
+    delete correcting[windowId];
+  }
+  const tabs = await winTabs(windowId);
+  if (tabs.find(t => t.id === tabId)?.pinned && meta[tabId]?.g) return; // shown in every panel: stay where we are
   const panel = panelOf(meta[tabId], cfg);
   la[panel] = tabId;
   if (cfg.switchPanelOnActivate && cfg.panels.find(p => p.id === ap[windowId])?.type !== 'bookmarks') ap[windowId] = panel;
   // reveal the active tab if it sits inside a collapsed branch
-  const nodes = buildTree(await winTabs(windowId), meta, cfg, panel);
+  const nodes = buildTree(tabs, meta, cfg, panel);
   let n = nodes.find(x => x.tab.id === tabId);
   while (n && n.parent != null) {
     if (meta[n.parent]) meta[n.parent].c = false;
@@ -177,15 +242,22 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   save();
 });
 
-chrome.tabs.onUpdated.addListener(async (id, change) => {
+chrome.tabs.onUpdated.addListener(async (id, change, tab) => {
+  if (change.pinned !== undefined) refreshCache(tab.windowId);
   await ready;
+  if (change.pinned === false && meta[id]?.g) { delete meta[id].g; save(); }
   scheduleRestore();
   if (change.url) save();
 });
 
+chrome.tabs.onMoved.addListener((id, info) => refreshCache(info.windowId));
+chrome.tabs.onAttached.addListener((id, info) => refreshCache(info.newWindowId));
+chrome.tabs.onDetached.addListener((id, info) => refreshCache(info.oldWindowId));
+
 chrome.windows.onRemoved.addListener(async w => {
   await ready;
   delete ap[w];
+  delete winCache[w];
   closedWins.add(w);
   save();
   setTimeout(async () => {
@@ -257,7 +329,7 @@ async function move({ ids, target, pos, windowId, panel }) {
 
 async function toPanel({ ids, panel }) {
   const { moved, roots } = await branches(ids);
-  for (const id of moved) ensure(id).panel = panel;
+  for (const id of moved) { ensure(id).panel = panel; delete meta[id].g; }
   for (const id of roots) ensure(id).p = null;
   await chrome.tabs.move(moved, { index: -1 }).catch(() => {});
   save();
@@ -273,10 +345,22 @@ async function toWindow({ ids }) {
   save();
 }
 
-async function closeTabs(ids) {
-  ids.forEach(id => delete meta[id]);
-  save();
+// keepMeta: let onRemoved handle the children (promote or close them, per settings), as for a normal close.
+// Without it, the ids are whole branches and their meta goes away with them.
+async function closeTabs(ids, { keepMeta = false } = {}) {
+  const tabs = await chrome.tabs.query({});
+  const gone = new Set(ids), targets = [];
+  for (const t of tabs) {
+    if (!t.active || !gone.has(t.id)) continue;
+    const target = tabAfterClose(tabs.filter(x => x.windowId === t.windowId), t.id, gone);
+    expectActivation(t.windowId, target);
+    targets.push([t.windowId, target]);
+  }
+  for (const id of ids) closingNow.add(id);
+  setTimeout(() => ids.forEach(id => closingNow.delete(id)), 2000);
+  if (!keepMeta) { ids.forEach(id => delete meta[id]); save(); }
   await chrome.tabs.remove(ids).catch(() => {});
+  for (const [w, target] of targets) activate(w, target);
 }
 
 async function newTab({ windowId, panel, parent, url, active = true }) {
@@ -298,9 +382,23 @@ async function setPanel({ windowId, panel }) {
   save();
   const p = cfg.panels.find(x => x.id === panel);
   if (!p || p.type === 'bookmarks' || !cfg.activateLastOnPanelSwitch) return;
-  const nodes = buildTree(await winTabs(windowId), meta, cfg, panel);
-  const pick = nodes.find(n => n.tab.id === la[panel]) || nodes.find(n => !n.hidden);
-  if (pick && !pick.tab.active) await chrome.tabs.update(pick.tab.id, { active: true });
+  const tabs = await winTabs(windowId);
+  const nodes = buildTree(tabs, meta, cfg, panel);
+  const pick = pinnedFor(tabs, meta, cfg, panel).panel.find(t => t.id === la[panel])
+    || nodes.find(n => n.tab.id === la[panel])?.tab || nodes.find(n => !n.hidden)?.tab;
+  if (pick && !pick.active) await chrome.tabs.update(pick.id, { active: true });
+}
+
+// Pin to one panel, or to all of them (global). index: where to put them among the pinned tabs.
+async function pin({ ids, global, panel, index }) {
+  for (const id of ids) {
+    const m = ensure(id);
+    if (global) m.g = true;
+    else { delete m.g; if (panel) m.panel = panelOf({ panel }, cfg); }
+  }
+  save();
+  for (const id of ids) await chrome.tabs.update(id, { pinned: true }).catch(() => {});
+  if (index != null) await chrome.tabs.move(ids, { index }).catch(() => {});
 }
 
 async function collapseAll({ windowId, panel, value }) {
@@ -314,7 +412,7 @@ async function snapshot(label = 'Auto') {
   const windows = wins.map(w => ({
     tabs: w.tabs.map(t => {
       const p = w.tabs.findIndex(x => x.id === meta[t.id]?.p);
-      return { u: urlOf(t), t: t.title, pin: t.pinned || undefined, panel: panelOf(meta[t.id], cfg), p: p < 0 ? undefined : p, c: meta[t.id]?.c || undefined };
+      return { u: urlOf(t), t: t.title, pin: t.pinned || undefined, g: meta[t.id]?.g, panel: panelOf(meta[t.id], cfg), p: p < 0 ? undefined : p, c: meta[t.id]?.c || undefined };
     }),
   }));
   const { snaps = [] } = await chrome.storage.local.get('snaps');
@@ -340,7 +438,7 @@ async function restoreSnapshot({ i }) {
         const active = !ids.some(x => x != null); // first restored tab loads, the rest stay unloaded
         const nt = await chrome.tabs.create({ windowId: win.id, url: t.u, active, pinned: !!t.pin });
         ids[j] = nt.id;
-        meta[nt.id] = { panel: t.panel, c: !!t.c };
+        meta[nt.id] = { panel: t.panel, c: !!t.c, g: t.g || undefined };
         // only web pages: discarding a just-created extension/internal page crashes Chromium
         if (!active && cfg.restoreUnloaded && /^https?:/.test(t.u)) chrome.tabs.discard(nt.id).catch(() => {});
       } catch { /* url not openable by extensions */ }
@@ -359,8 +457,9 @@ chrome.alarms.onAlarm.addListener(async a => { await ready; if (a.name === 'snap
 
 // ---------- messages & commands ----------
 const handlers = {
-  move, toPanel, toWindow, newTab, setPanel, collapseAll, restoreSnapshot,
+  move, toPanel, toWindow, newTab, setPanel, collapseAll, restoreSnapshot, pin,
   collapse: ({ id, value }) => { const m = ensure(id); m.c = value ?? !m.c; save(); },
+  close: ({ ids }) => closeTabs(ids, { keepMeta: true }),
   closeBranch: async ({ ids }) => closeTabs((await branches(ids)).moved),
   closeBelow: async ({ id, windowId, panel }) => {
     const nodes = buildTree(await winTabs(windowId), meta, cfg, panel);

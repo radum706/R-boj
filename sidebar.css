@@ -27,7 +27,13 @@ header { border-bottom: 1px solid var(--line); padding: 4px; display: grid; gap:
   border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0;
 }
 .panel.on { border-bottom-color: var(--pc); background: var(--hover); }
-.panel .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pc); }
+.ic { width: 14px; height: 14px; flex: none; display: grid; place-items: center; }
+.ic svg { width: 100%; height: 100%; }
+.panel .ic { color: var(--pc); }
+.icons { display: grid; grid-template-columns: repeat(7, 26px); gap: 2px; padding: 2px 4px 4px; }
+.icons button { width: 26px; height: 26px; display: grid; place-items: center; color: var(--muted); }
+.icons button:hover { color: var(--fg); }
+.icons button.on { color: var(--accent); background: var(--active); }
 .panel .n { color: var(--muted); font-size: 11px; }
 .panel.drop { outline: 2px solid var(--pc); }
 .bar { display: flex; gap: 4px; }
@@ -69,6 +75,12 @@ header { border-bottom: 1px solid var(--line); padding: 4px; display: grid; gap:
 .row:hover .x, .row.active .x { opacity: 1; }
 .folder .title { font-weight: 500; }
 .empty { color: var(--muted); padding: 16px; text-align: center; }
+.newrow {
+  height: var(--row); width: calc(100% - 8px); margin: 2px 4px 0; padding-left: 22px;
+  display: flex; align-items: center; gap: 4px; color: var(--muted); text-align: left;
+}
+.newrow:hover { color: var(--fg); }
+.newrow .plus { width: 16px; flex: none; text-align: center; font-size: 16px; line-height: 1; }
 
 #ctx {
   position: fixed; z-index: 10; min-width: 180px; max-width: 260px; padding: 4px; background: var(--menu);
@@ -81,3 +93,4 @@ header { border-bottom: 1px solid var(--line); padding: 4px; display: grid; gap:
 #ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 #ctx input { width: 100%; margin: 2px 0; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
 #ctx input[type=color] { height: 28px; padding: 2px; }
+#pinned .pinsep { width: 1px; margin: 5px 3px; background: var(--line); }

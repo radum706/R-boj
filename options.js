@@ -38,9 +38,10 @@ document.addEventListener('input', e => {
 });
 
 // ---------- panels ----------
+let iconsOpen = null; // id of the panel whose icon picker is showing
 function renderPanels() {
   const box = $('#panels-ed');
-  box.replaceChildren(...cfg.panels.map((p, i) => {
+  box.replaceChildren(...cfg.panels.flatMap((p, i) => {
     const r = document.createElement('div');
     r.className = 'prow';
     const name = Object.assign(document.createElement('input'), { type: 'text', value: p.name });
@@ -52,20 +53,25 @@ function renderPanels() {
     const btn = (label, fn, disabled) => Object.assign(document.createElement('button'), { className: 'btn', textContent: label, disabled, onclick: fn });
     const swap = j => { [cfg.panels[i], cfg.panels[j]] = [cfg.panels[j], cfg.panels[i]]; save(); renderPanels(); };
     const lastTabs = p.type !== 'bookmarks' && tabPanels(cfg).length === 1;
-    r.append(color, name, kind,
+    const icon = Object.assign(document.createElement('button'), { className: 'btn icon', title: 'Icon' });
+    icon.style.color = p.color;
+    icon.append(iconEl(panelIcon(p)));
+    icon.onclick = () => { iconsOpen = iconsOpen === p.id ? null : p.id; renderPanels(); };
+    r.append(icon, color, name, kind,
       btn('↑', () => swap(i - 1), i === 0),
       btn('↓', () => swap(i + 1), i === cfg.panels.length - 1),
       btn('Delete', () => { cfg.panels.splice(i, 1); save(); renderPanels(); }, lastTabs));
-    return r;
+    if (iconsOpen !== p.id) return [r];
+    return [r, iconGrid(panelIcon(p), v => { p.icon = v; iconsOpen = null; save(); renderPanels(); })];
   }));
   $('#add-bm').disabled = cfg.panels.some(p => p.type === 'bookmarks');
 }
 $('#add-panel').onclick = () => {
-  cfg.panels.push({ id: 'p' + Date.now().toString(36), name: `Panel ${tabPanels(cfg).length + 1}`, color: '#38b2ac' });
+  cfg.panels.push({ id: 'p' + Date.now().toString(36), name: `Panel ${tabPanels(cfg).length + 1}`, color: '#38b2ac', icon: 'dot' });
   save(); renderPanels();
 };
 $('#add-bm').onclick = () => {
-  cfg.panels.push({ id: 'bookmarks', name: 'Bookmarks', color: '#e0a030', type: 'bookmarks' });
+  cfg.panels.push({ id: 'bookmarks', name: 'Bookmarks', color: '#e0a030', type: 'bookmarks', icon: 'bookmark' });
   save(); renderPanels();
 };
 

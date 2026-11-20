@@ -55,21 +55,24 @@ function renderPanels() {
     b.style.setProperty('--pc', p.color);
     b.dataset.panel = p.id;
     b.title = p.name;
-    b.append(el('span', 'dot'), el('span', '', p.name));
+    b.append(iconEl(panelIcon(p)), el('span', '', p.name));
     if (p.type !== 'bookmarks') b.append(el('span', 'n', counts[p.id] || 0));
     return b;
   }), Object.assign(el('button', 'panel add', '+'), { title: 'Add panel' }));
 }
 
+// Global pinned tabs first, then the ones pinned to this panel.
 function renderPinned() {
-  $('#pinned').replaceChildren(...tabs.filter(t => t.pinned).map(t => {
+  const { global, panel } = pinnedFor(tabs, meta, cfg, curPanel().id);
+  const pin = t => {
     const b = el('button', 'pin' + (t.active ? ' active' : ''));
     b.dataset.id = t.id;
-    b.title = t.title;
+    b.title = `${t.title}\n${meta[t.id]?.g ? 'Pinned in all panels' : `Pinned in ${curPanel().name}`}`;
     b.draggable = true;
     b.append(Object.assign(el('img', 'fav'), { src: favicon(t.url, t.favIconUrl) }));
     return b;
-  }));
+  };
+  $('#pinned').replaceChildren(...global.map(pin), ...(global.length && panel.length ? [el('span', 'pinsep')] : []), ...panel.map(pin));
 }
 
 function row(n, flat) {
@@ -98,6 +101,11 @@ function renderTabs() {
   const list = $('#list');
   list.replaceChildren(...visible.map(n => row(n, !!q)));
   if (!visible.length) list.append(el('div', 'empty', q ? 'No matches' : 'No tabs in this panel'));
+  if (!q) {
+    const add = Object.assign(el('button', 'newrow'), { title: 'New tab in this panel' });
+    add.append(el('span', 'plus', '+'), el('span', '', 'New tab'));
+    list.append(add);
+  }
   const act = tabs.find(t => t.active)?.id;
   if (act !== lastActive) {
     lastActive = act;
@@ -144,6 +152,7 @@ function menu(x, y, items) {
   for (const it of items.filter(Boolean)) {
     if (it === '-') box.append(el('hr'));
     else if (it.header) box.append(el('div', 'hd', it.header));
+    else if (it.icons) box.append(iconGrid(it.icons, v => { hideMenu(); it.fn(v); }));
     else if (it.input) {
       const i = Object.assign(el('input'), { type: it.input, value: it.value });
       i.addEventListener('change', () => it.fn(i.value));
@@ -171,7 +180,15 @@ function tabMenu(e, id) {
     ids.length === 1 && !t.pinned && { label: 'New child tab', fn: () => send({ type: 'newTab', windowId: winId, panel, parent: id }) },
     { label: 'Reload', fn: each(i => chrome.tabs.reload(i)) },
     { label: 'Duplicate', fn: each(i => chrome.tabs.duplicate(i)) },
-    { label: t.pinned ? 'Unpin' : 'Pin', fn: each(i => chrome.tabs.update(i, { pinned: !t.pinned })) },
+    ...(t.pinned ? [
+      { label: 'Unpin', fn: each(i => chrome.tabs.update(i, { pinned: false })) },
+      meta[id]?.g
+        ? { label: 'Show only in this panel', fn: () => send({ type: 'pin', ids, global: false, panel: tabPanel() }) }
+        : { label: 'Show in all panels', fn: () => send({ type: 'pin', ids, global: true }) },
+    ] : [
+      { label: 'Pin to this panel', fn: () => send({ type: 'pin', ids, global: false, panel: tabPanel() }) },
+      { label: 'Pin to all panels', fn: () => send({ type: 'pin', ids, global: true }) },
+    ]),
     { label: t.mutedInfo?.muted ? 'Unmute' : 'Mute', fn: each(i => chrome.tabs.update(i, { muted: !t.mutedInfo?.muted })) },
     { label: 'Unload', fn: each(i => chrome.tabs.discard(i).catch(() => {})) },
     { label: 'Copy URL', fn: () => navigator.clipboard.writeText(ids.map(i => tabById(i).url).join('\n')) },
@@ -188,7 +205,7 @@ function tabMenu(e, id) {
     n?.desc && { label: 'Close branch', fn: () => send({ type: 'closeBranch', ids }) },
     ids.length === 1 && n && { label: 'Close tabs below', fn: () => send({ type: 'closeBelow', id, windowId: winId, panel }) },
     n && { label: 'Close other tabs', fn: () => send({ type: 'closeOthers', ids, windowId: winId, panel }) },
-    { label: ids.length > 1 ? `Close ${ids.length} tabs` : 'Close', fn: () => chrome.tabs.remove(ids) },
+    { label: ids.length > 1 ? `Close ${ids.length} tabs` : 'Close', fn: () => send({ type: 'close', ids }) },
   ]);
 }
 
@@ -204,10 +221,11 @@ function panelMenu(e, id) {
   menu(e.clientX, e.clientY, [
     { header: 'Name' }, { input: 'text', value: p.name, fn: v => v.trim() && upd({ name: v.trim() }) },
     { header: 'Color' }, { input: 'color', value: p.color, fn: v => upd({ color: v }) },
+    { header: 'Icon' }, { icons: panelIcon(p), fn: v => upd({ icon: v }) },
     '-',
     isTabs && { label: 'Collapse all', fn: () => send({ type: 'collapseAll', windowId: winId, panel: id, value: true }) },
     isTabs && { label: 'Expand all', fn: () => send({ type: 'collapseAll', windowId: winId, panel: id, value: false }) },
-    isTabs && { label: 'Close all tabs in panel', fn: () => chrome.tabs.remove(buildTree(tabs, meta, cfg, id).map(n => n.tab.id)) },
+    isTabs && { label: 'Close all tabs in panel', fn: () => send({ type: 'close', ids: buildTree(tabs, meta, cfg, id).map(n => n.tab.id) }) },
     (!isTabs || tabPanels(cfg).length > 1) && { label: 'Delete panel (tabs move to first panel)', fn: () => saveCfg({ ...cfg, panels: cfg.panels.filter(x => x.id !== id) }) },
   ]);
 }
@@ -225,6 +243,7 @@ const idOf = r => r && +r.dataset.id;
 
 $('#list').addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
 $('#list').addEventListener('click', e => {
+  if (e.target.closest('.newrow')) return send({ type: 'newTab', windowId: winId, panel: tabPanel() });
   const r = rowOf(e);
   if (!r) return;
   if (r.dataset.bm) return bmClick(e, r);
@@ -255,6 +274,7 @@ $('#list').addEventListener('auxclick', e => {
   if (!r.dataset.bm) closeIds(idOf(r));
 });
 $('#list').addEventListener('dblclick', e => {
+  if (e.target.closest('.newrow')) return;
   const r = rowOf(e);
   if (!r) return send({ type: 'newTab', windowId: winId, panel: tabPanel() });
   if (!r.dataset.bm && nodeById(idOf(r))?.desc) send({ type: 'collapse', id: idOf(r) });
@@ -268,7 +288,7 @@ $('#list').addEventListener('contextmenu', e => {
 });
 
 function closeIds(id) {
-  chrome.tabs.remove(sel.has(id) && sel.size > 1 ? [...sel] : [id]);
+  send({ type: 'close', ids: sel.has(id) && sel.size > 1 ? [...sel] : [id] });
 }
 
 function bmClick(e, r) {
@@ -304,7 +324,7 @@ $('#panels').addEventListener('wheel', e => { $('#panels').scrollLeft += e.delta
 
 // pinned
 $('#pinned').addEventListener('click', e => { const b = e.target.closest('.pin'); if (b) chrome.tabs.update(+b.dataset.id, { active: true }); });
-$('#pinned').addEventListener('auxclick', e => { const b = e.target.closest('.pin'); if (b && e.button === 1) chrome.tabs.remove(+b.dataset.id); });
+$('#pinned').addEventListener('auxclick', e => { const b = e.target.closest('.pin'); if (b && e.button === 1) send({ type: 'close', ids: [+b.dataset.id] }); });
 $('#pinned').addEventListener('contextmenu', e => { e.preventDefault(); const b = e.target.closest('.pin'); if (b) tabMenu(e, +b.dataset.id); });
 
 // header
@@ -401,8 +421,9 @@ document.addEventListener('drop', async e => {
     return;
   }
   if (pin && ids) {
-    await Promise.all(ids.map(i => chrome.tabs.update(i, { pinned: true })));
-    return chrome.tabs.move(ids, { windowId: winId, index: tabById(+pin.dataset.id).index });
+    // dropped on a pinned tab: pin the same way it is, in all panels or just this one
+    const at = +pin.dataset.id;
+    return send({ type: 'pin', ids, global: !!meta[at]?.g, panel: tabPanel(), index: tabById(at).index });
   }
   if (curPanel().type === 'bookmarks') return;
   const target = r ? +r.dataset.id : null, pos = r ? zone(e, r) : 'end';

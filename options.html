@@ -23,6 +23,9 @@
     .snap .info { flex: 1; min-width: 0; }
     .snap small { color: var(--muted); }
     .btn { padding: 6px 10px; border: 1px solid var(--line); background: var(--bg); }
+    .btn.icon { padding: 0; width: 30px; height: 30px; display: grid; place-items: center; }
+    .btn.icon .ic { width: 16px; height: 16px; }
+    .icons { padding: 4px 0 10px 38px; border-bottom: 1px solid var(--line); }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0; }
     .note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
     kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
@@ -93,6 +96,7 @@
   <input type="file" id="file" accept="application/json,.json" hidden>
 </div>
 <script src="tree.js"></script>
+<script src="icons.js"></script>
 <script src="options.js"></script>
 </body>
 </html>

@@ -13,6 +13,7 @@ Tabs nest under the tab that opened them, so you can see where each one came fro
 - Collapse and expand branches, with a count of the hidden tabs
 - Closing a collapsed parent closes its whole branch (can be turned off)
 - When a parent closes, its children either move up a level or close too (your choice)
+- Closing the active tab takes you to the tab above it in the same panel, not wherever the browser would go
 
 **Drag and drop**
 - Drop on a tab's top or bottom edge to place it beside that tab, in the middle to make it a child
@@ -21,13 +22,13 @@ Tabs nest under the tab that opened them, so you can see where each one came fro
 - Drag several selected tabs at once
 
 **Panels**
-- Separate tab lists in each window, each with its own name and colour
-- New tabs open in the panel you're viewing
+- Separate tab lists in each window, each with its own name, colour and icon
+- New tabs open in the panel you're viewing; there's a New tab button under each panel's list
 - Tabs opened from a page stay in their parent's panel
 - Optionally switch to a tab's panel when that tab is activated, and return to a panel's last tab when you come back to it
 
 **Also**
-- Pinned tabs shown as a row of icons at the top
+- Pinned tabs shown as a row of icons at the top: pin a tab to one panel, or to all panels so it shows wherever you are
 - Bookmarks panel with folders
 - Search with `/`
 - Select several tabs with Ctrl or Shift click
@@ -83,6 +84,7 @@ The tree isn't stored as its own structure. Each tab only stores its parent, pan
 | File | Role |
 |---|---|
 | `tree.js` | Default settings and rebuilding the tree (shared code) |
+| `icons.js` | Panel icons |
 | `background.js` | Tab events, moving tabs, panels, snapshots, restart recovery |
 | `sidebar.*` | The side panel interface |
 | `options.*` | Settings, snapshots, backup |
@@ -94,7 +96,7 @@ Run the tests with `node test_tree.js && node test_restore.js`. The second one r
 These come from Chromium and can't be fixed from an extension:
 
 - Brave's own tab strip can't be hidden, and it shows the tabs of every panel.
-- No containers per panel. Brave has its own containers (Settings → Brave Content), but no extension API for them yet.
+- No containers. Brave has its own containers, but extensions can't see which container a tab is in or open a tab in one ([brave/brave-browser#60927](https://github.com/brave/brave-browser/issues/60927)). Opening a tab in a container from the tab menu, or giving each panel its own container, has to wait for that API.
 - After a restart, if several tabs have exactly the same URL, a few can end up in the wrong place in the tree.
 
 ## Permissions
