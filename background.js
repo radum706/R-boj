@@ -1,66 +1,118 @@
 importScripts('tree.js');
 
-// meta: tabId -> { p: parentTabId|null, c: collapsed, panel }
+// meta: tabId -> { p: parentTabId|null, c: collapsed, panel, u: last known url }
 // ap: windowId -> active panel id,  la: panelId -> last active tabId
 let cfg = DEFAULTS, meta = {}, ap = {}, la = {};
-let restoreSrc = [], restoreMap = new Map();
+
+// Tab ids change when the browser restarts, so the tree saved in storage.local is matched back to the new tabs
+// by URL. Brave restores tabs over several seconds and an unloaded tab may not report its URL yet, so matching
+// runs again on every tab event until all saved tabs are found or RESTORE_MS runs out. Until then the saved
+// tree is not overwritten, or the tabs that haven't been matched yet would lose their place.
+// pending: { src: saved tree, map: [[savedId, newId]], until: timestamp } | null
+let pending = null;
+const RESTORE_MS = 2 * 60 * 1000;
+
+// Windows closed in the last few seconds. Their tabs stay in the saved tree until we know the browser is still
+// running: when it quits, it closes every window first, and saving then would empty the tree.
+let closedWins = new Set();
+const CLOSE_CONFIRM_MS = 5000;
+
+const urlOf = t => t.url || t.pendingUrl || meta[t.id]?.u || '';
 
 const ready = (async () => {
   const l = await chrome.storage.local.get(['cfg', 'tree']);
   cfg = { ...DEFAULTS, ...l.cfg };
-  const s = await chrome.storage.session.get(['meta', 'ap', 'la']);
+  const s = await chrome.storage.session.get(['meta', 'ap', 'la', 'pending', 'closedWins']);
   if (s.meta) {
+    // The service worker was stopped and started again; the browser kept running.
     ({ meta } = s); ap = s.ap || {}; la = s.la || {};
+    pending = s.pending || null;
+    closedWins = new Set(s.closedWins || []);
   } else {
-    // Fresh browser start or extension reload: tab ids changed (or not), rebuild tree from last persisted state.
-    // Brave may still be restoring tabs, so retry a couple of times for tabs that only have default meta.
-    restoreSrc = l.tree || [];
-    await restore();
-    setTimeout(() => restore(), 3000);
-    setTimeout(() => restore(), 10000);
+    // Browser start or extension reload.
+    startRestore(l.tree);
   }
+  if (pending) await restore();
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
   setupAlarm();
 })();
 
+function startRestore(tree) {
+  pending = tree?.length ? { src: tree, map: [], until: Date.now() + RESTORE_MS } : null;
+}
+
+let restoreT;
+function scheduleRestore() {
+  if (!pending) return;
+  clearTimeout(restoreT);
+  restoreT = setTimeout(restore, 500);
+}
+
 async function restore() {
-  const tabs = await chrome.tabs.query({});
-  const fresh = t => (!meta[t.id] || meta[t.id].auto) && ![...restoreMap.values()].includes(t.id);
+  if (!pending) return;
+  const tabs = (await chrome.tabs.query({})).sort((a, b) => a.windowId - b.windowId || a.index - b.index);
+  const map = new Map(pending.map), used = new Set(map.values()), added = new Set();
+  const fresh = t => (!meta[t.id] || meta[t.id].auto) && !used.has(t.id);
+  const pair = (s, t) => { map.set(s.id, t.id); used.add(t.id); added.add(t.id); };
+  const todo = pending.src.filter(s => s.u && !map.has(s.id));
+
+  // Same id and URL: the extension was reloaded and the ids survived.
   const byId = new Map(tabs.map(t => [t.id, t]));
-  for (const s of restoreSrc) {
+  for (const s of todo) {
     const t = byId.get(s.id);
-    if (!restoreMap.has(s.id) && t && t.url === s.u && fresh(t)) restoreMap.set(s.id, t.id);
+    if (t && urlOf(t) === s.u && fresh(t)) pair(s, t);
   }
+  // Otherwise the first unmatched tab with the same URL, in tab order.
   const queue = new Map();
-  for (const t of tabs) if (fresh(t)) queue.set(t.url, [...(queue.get(t.url) || []), t.id]);
-  for (const s of restoreSrc) {
-    const q = queue.get(s.u);
-    if (!restoreMap.has(s.id) && q && q.length) restoreMap.set(s.id, q.shift());
+  for (const t of tabs) {
+    const u = urlOf(t);
+    if (u && fresh(t)) queue.set(u, [...(queue.get(u) || []), t]);
   }
-  for (const s of restoreSrc) {
-    const id = restoreMap.get(s.id);
-    if (id != null) meta[id] = { p: restoreMap.get(s.p) ?? null, c: s.c, panel: s.panel };
+  for (const s of todo) {
+    const t = !map.has(s.id) && queue.get(s.u)?.shift();
+    if (t) pair(s, t);
   }
+
+  for (const s of pending.src) {
+    const id = map.get(s.id);
+    if (id == null) continue;
+    const parent = map.get(s.p) ?? null;
+    if (added.has(id)) meta[id] = { p: parent, c: !!s.c, panel: s.panel, u: s.u };
+    else if (meta[id] && meta[id].p == null && parent != null) meta[id].p = parent; // parent found later
+  }
+  if (cfg.switchPanelOnActivate) {
+    for (const t of tabs) if (t.active && added.has(t.id)) ap[t.windowId] = panelOf(meta[t.id], cfg);
+  }
+
+  const done = map.size >= pending.src.filter(s => s.u).length || Date.now() > pending.until;
+  pending = done ? null : { ...pending, map: [...map] };
+  if (!done) setTimeout(scheduleRestore, 5000); // the worker may sleep through RESTORE_MS; it rechecks on wake
   save();
 }
 
 let saveT, treeT;
 function save() {
   clearTimeout(saveT);
-  saveT = setTimeout(() => chrome.storage.session.set({ meta, ap, la }), 20);
+  saveT = setTimeout(() => chrome.storage.session.set({ meta, ap, la, pending, closedWins: [...closedWins] }), 20);
   clearTimeout(treeT);
   treeT = setTimeout(persistTree, 1000);
 }
 
 async function persistTree() {
+  if (pending && Date.now() > pending.until) pending = null;
+  if (pending) return;
   const tabs = await chrome.tabs.query({});
+  if (!tabs.length) return; // every window is closed: the browser is quitting
   const live = new Set(tabs.map(t => t.id));
+  const { tree: prev = [] } = await chrome.storage.local.get('tree');
+  const kept = prev.filter(e => closedWins.has(e.w) && !live.has(e.id));
   for (const id in meta) if (!live.has(+id)) delete meta[id];
-  await chrome.storage.local.set({
-    tree: tabs.filter(t => meta[t.id]).map(t => ({
-      id: t.id, u: t.url, p: meta[t.id].p ?? null, c: !!meta[t.id].c, panel: meta[t.id].panel,
-    })),
+  const entries = tabs.filter(t => meta[t.id]).map(t => {
+    const m = meta[t.id];
+    m.u = urlOf(t);
+    return { id: t.id, u: m.u, w: t.windowId, p: m.p ?? null, c: !!m.c, panel: m.panel };
   });
+  await chrome.storage.local.set({ tree: [...entries, ...kept] });
 }
 
 const winTabs = windowId => chrome.tabs.query({ windowId });
@@ -69,6 +121,7 @@ const curPanel = windowId => panelOf({ panel: ap[windowId] }, cfg);
 // ---------- tab events ----------
 chrome.tabs.onCreated.addListener(async tab => {
   await ready;
+  scheduleRestore();
   if (meta[tab.id]) return; // set explicitly by newTab / snapshot restore
   const op = tab.openerTabId;
   meta[tab.id] = {
@@ -81,7 +134,7 @@ chrome.tabs.onCreated.addListener(async tab => {
 
 chrome.tabs.onRemoved.addListener(async (id, info) => {
   await ready;
-  if (info.isWindowClosing) return; // keep tree intact across shutdown
+  if (info.isWindowClosing) { closedWins.add(info.windowId); return; } // keep tree intact across shutdown
   const m = meta[id];
   if (!m) return;
   delete meta[id];
@@ -105,6 +158,7 @@ chrome.tabs.onReplaced.addListener(async (added, removed) => {
   if (meta[removed]) meta[added] = meta[removed];
   delete meta[removed];
   for (const k in meta) if (meta[k].p === removed) meta[k].p = added;
+  if (pending) pending.map = pending.map.map(([s, id]) => [s, id === removed ? added : id]);
   save();
 });
 
@@ -123,8 +177,34 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   save();
 });
 
-chrome.tabs.onUpdated.addListener((id, change) => { if (change.url) save(); });
-chrome.windows.onRemoved.addListener(async w => { await ready; delete ap[w]; save(); });
+chrome.tabs.onUpdated.addListener(async (id, change) => {
+  await ready;
+  scheduleRestore();
+  if (change.url) save();
+});
+
+chrome.windows.onRemoved.addListener(async w => {
+  await ready;
+  delete ap[w];
+  closedWins.add(w);
+  save();
+  setTimeout(async () => {
+    // Other windows are still open, so the user closed this one: drop its tabs from the saved tree.
+    if (!(await chrome.windows.getAll()).length) return;
+    closedWins.delete(w);
+    save();
+  }, CLOSE_CONFIRM_MS);
+});
+
+chrome.windows.onCreated.addListener(async () => {
+  await ready;
+  if (!closedWins.size || pending || (await chrome.windows.getAll()).length > 1) return;
+  // Every window was closed but the browser kept running in the background; it is now reopening the last
+  // session with new tab ids, just like after a restart.
+  startRestore((await chrome.storage.local.get('tree')).tree);
+  closedWins.clear();
+  scheduleRestore();
+});
 
 chrome.storage.onChanged.addListener((ch, area) => {
   if (area === 'local' && ch.cfg) { cfg = { ...DEFAULTS, ...ch.cfg.newValue }; setupAlarm(); }
@@ -234,7 +314,7 @@ async function snapshot(label = 'Auto') {
   const windows = wins.map(w => ({
     tabs: w.tabs.map(t => {
       const p = w.tabs.findIndex(x => x.id === meta[t.id]?.p);
-      return { u: t.url, t: t.title, pin: t.pinned || undefined, panel: panelOf(meta[t.id], cfg), p: p < 0 ? undefined : p, c: meta[t.id]?.c || undefined };
+      return { u: urlOf(t), t: t.title, pin: t.pinned || undefined, panel: panelOf(meta[t.id], cfg), p: p < 0 ? undefined : p, c: meta[t.id]?.c || undefined };
     }),
   }));
   const { snaps = [] } = await chrome.storage.local.get('snaps');

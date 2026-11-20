@@ -87,7 +87,7 @@ The tree isn't stored as its own structure. Each tab only stores its parent, pan
 | `sidebar.*` | The side panel interface |
 | `options.*` | Settings, snapshots, backup |
 
-Run the tree test with `node test_tree.js`.
+Run the tests with `node test_tree.js && node test_restore.js`. The second one runs `background.js` against a fake browser to check that the tree survives restarts.
 
 ## Limitations
 
